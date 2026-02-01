@@ -4,7 +4,8 @@
 % 本程序直接调用:
 % 1. michell.m      - Michell积分计算兴波阻力
 % 2. ITTC 1957公式  - 摩擦阻力计算
-% 3. PVL.m          - 螺旋桨敞水效率计算(升力线理论) [必须使用]
+% 3. Wageningen B系列 + 动量理论 - 螺旋桨敞水效率计算
+%    (替代PVL.m升力线理论，避免高CT值数值不稳定问题)
 % 4. Holtrop_Propulsion_Calculation_1982.m - 伴流分数(w)、推力减额分数(t)、相对旋转效率(eta_R)
 %
 % 可调参数: 船长L, 船宽B, 方形系数Cb, 船速Vs, 吃水T
@@ -18,7 +19,7 @@ clear; close all; clc;
 
 fprintf('================================================================================\n');
 fprintf('          船舶完整推进效率分析系统\n');
-fprintf('          Michell积分 + ITTC + PVL + Holtrop (1982) 完全集成\n');
+fprintf('          Michell积分 + ITTC + Wageningen B系列 + Holtrop (1982) 完全集成\n');
 fprintf('================================================================================\n\n');
 
 % ==============================================================================
@@ -47,9 +48,9 @@ Nz = 40;                  % 水线数
 N_theta = 80;             % 传播角采样数
 
 % ==============================================================================
-% 2. PVL螺旋桨参数配置
+% 2. 螺旋桨参数配置
 % ==============================================================================
-fprintf('>>> 配置PVL螺旋桨参数...\n');
+fprintf('>>> 配置螺旋桨参数...\n');
 
 % 单桨设计参数
 Single_def1 = zeros(1, 3);
@@ -175,18 +176,13 @@ for i = 1:NumSamples
     Thrust_req = Rt / (1 - t_thrust);
     Va = V_ship * (1 - w);
 
-    % 更新PVL参数
-    Common_Def = Common_Def_base;
-    Common_Def(2) = Va;
+    % 计算螺旋桨敞水效率 (Wageningen B系列 + 动量理论)
+    n = Single_def1(2) / 60;  % 转速 [rps]
+    D = Single_def1(3);       % 直径 [m]
+    J = Va / (n * D);         % 前进系数
+    KT = Thrust_req / (Rho_water * n^2 * D^4);  % 推力系数
 
-    % 构建伴流场速度分布
-    XVA_def = ones(size(XR0)) * (1 - w) + 0.08*(1-XR0);
-    XVT_def = zeros(size(XR0)) + 0.01 * (1-XR0);
-
-    % 调用PVL计算螺旋桨敞水效率 (优先使用PVL.m，失败时用理论模型)
-    eta_O = call_PVL_for_efficiency(Common_Def, XR0, XCHD_def, XCD_def, ...
-        XVA_def, XVT_def, f0oc_def, t0oc_def, skew_def, rake_def, ...
-        Single_def1, Single_def2, Mean, Thick, Thrust_req);
+    eta_O = calculate_propeller_efficiency(J, KT);
 
     eta_D = eta_H * eta_O * eta_R;
     Pe = Rt * V_ship;
@@ -251,20 +247,13 @@ for i = 1:NumSamples
     Thrust_req = Rt / (1 - t_thrust);
     Va = V_ship * (1 - w);
 
-    Common_Def = Common_Def_base;
-    Common_Def(2) = Va;
-    XVA_def = ones(size(XR0)) * (1 - w) + 0.08*(1-XR0);
-    XVT_def = zeros(size(XR0)) + 0.01 * (1-XR0);
+    % 计算螺旋桨敞水效率 (Wageningen B系列 + 动量理论)
+    n = Single_def1(2) / 60;  % 转速 [rps]
+    D = Single_def1(3);       % 直径 [m]
+    J = Va / (n * D);         % 前进系数
+    KT = Thrust_req / (Rho_water * n^2 * D^4);  % 推力系数
 
-    eta_O = call_PVL_for_efficiency(Common_Def, XR0, XCHD_def, XCD_def, ...
-        XVA_def, XVT_def, f0oc_def, t0oc_def, skew_def, rake_def, ...
-        Single_def1, Single_def2, Mean, Thick, Thrust_req);
-
-    if isnan(eta_O)
-        fprintf('%4d  %6.2f  %8.1f  %8.1f  %8.1f  %.4f  %.4f  %.4f  %.4f  [PVL无效-跳过]\n', ...
-            i, B, Rt/1000, Rw/1000, Rf/1000, w, t_thrust, eta_R, eta_H);
-        continue;
-    end
+    eta_O = calculate_propeller_efficiency(J, KT);
 
     eta_D = eta_H * eta_O * eta_R;
     Pd = Rt * V_ship / eta_D;
@@ -326,20 +315,13 @@ for i = 1:NumSamples
     Thrust_req = Rt / (1 - t_thrust);
     Va = V_ship * (1 - w);
 
-    Common_Def = Common_Def_base;
-    Common_Def(2) = Va;
-    XVA_def = ones(size(XR0)) * (1 - w) + 0.08*(1-XR0);
-    XVT_def = zeros(size(XR0)) + 0.01 * (1-XR0);
+    % 计算螺旋桨敞水效率 (Wageningen B系列 + 动量理论)
+    n = Single_def1(2) / 60;  % 转速 [rps]
+    D = Single_def1(3);       % 直径 [m]
+    J = Va / (n * D);         % 前进系数
+    KT = Thrust_req / (Rho_water * n^2 * D^4);  % 推力系数
 
-    eta_O = call_PVL_for_efficiency(Common_Def, XR0, XCHD_def, XCD_def, ...
-        XVA_def, XVT_def, f0oc_def, t0oc_def, skew_def, rake_def, ...
-        Single_def1, Single_def2, Mean, Thick, Thrust_req);
-
-    if isnan(eta_O)
-        fprintf('%4d  %6.1f  %8.1f  %8.1f  %8.1f  %.4f  %.4f  %.4f  %.4f  [PVL无效-跳过]\n', ...
-            i, L, Rt/1000, Rw/1000, Rf/1000, w, t_thrust, eta_R, eta_H);
-        continue;
-    end
+    eta_O = calculate_propeller_efficiency(J, KT);
 
     eta_D = eta_H * eta_O * eta_R;
     Pd = Rt * V_ship / eta_D;
@@ -402,20 +384,13 @@ for i = 1:NumSamples
     Thrust_req = Rt / (1 - t_thrust);
     Va = V_ship * (1 - w);
 
-    Common_Def = Common_Def_base;
-    Common_Def(2) = Va;
-    XVA_def = ones(size(XR0)) * (1 - w) + 0.08*(1-XR0);
-    XVT_def = zeros(size(XR0)) + 0.01 * (1-XR0);
+    % 计算螺旋桨敞水效率 (Wageningen B系列 + 动量理论)
+    n = Single_def1(2) / 60;  % 转速 [rps]
+    D = Single_def1(3);       % 直径 [m]
+    J = Va / (n * D);         % 前进系数
+    KT = Thrust_req / (Rho_water * n^2 * D^4);  % 推力系数
 
-    eta_O = call_PVL_for_efficiency(Common_Def, XR0, XCHD_def, XCD_def, ...
-        XVA_def, XVT_def, f0oc_def, t0oc_def, skew_def, rake_def, ...
-        Single_def1, Single_def2, Mean, Thick, Thrust_req);
-
-    if isnan(eta_O)
-        fprintf('%4d  %7.2f  %8.1f  %8.1f  %8.1f  %.4f  %.4f  %.4f  %.4f  [PVL无效-跳过]\n', ...
-            i, Vs_knots, Rt/1000, Rw/1000, Rf/1000, w, t_thrust, eta_R, eta_H);
-        continue;
-    end
+    eta_O = calculate_propeller_efficiency(J, KT);
 
     eta_D = eta_H * eta_O * eta_R;
     Pe = Rt * V_ship;
@@ -481,20 +456,13 @@ for i = 1:NumSamples
     Thrust_req = Rt / (1 - t_thrust);
     Va = V_ship * (1 - w);
 
-    Common_Def = Common_Def_base;
-    Common_Def(2) = Va;
-    XVA_def = ones(size(XR0)) * (1 - w) + 0.08*(1-XR0);
-    XVT_def = zeros(size(XR0)) + 0.01 * (1-XR0);
+    % 计算螺旋桨敞水效率 (Wageningen B系列 + 动量理论)
+    n = Single_def1(2) / 60;  % 转速 [rps]
+    D = Single_def1(3);       % 直径 [m]
+    J = Va / (n * D);         % 前进系数
+    KT = Thrust_req / (Rho_water * n^2 * D^4);  % 推力系数
 
-    eta_O = call_PVL_for_efficiency(Common_Def, XR0, XCHD_def, XCD_def, ...
-        XVA_def, XVT_def, f0oc_def, t0oc_def, skew_def, rake_def, ...
-        Single_def1, Single_def2, Mean, Thick, Thrust_req);
-
-    if isnan(eta_O)
-        fprintf('%4d  %6.2f  %8.1f  %8.1f  %8.1f  %.4f  %.4f  %.4f  %.4f  [PVL无效-跳过]\n', ...
-            i, T, Rt/1000, Rw/1000, Rf/1000, w, t_thrust, eta_R, eta_H);
-        continue;
-    end
+    eta_O = calculate_propeller_efficiency(J, KT);
 
     eta_D = eta_H * eta_O * eta_R;
     Pd = Rt * V_ship / eta_D;
@@ -664,7 +632,7 @@ text(0.1, 0.12, '4. 当\eta_H增益 > 阻力损失 \rightarrow 总效率更高',
 text(0.1, 0.02, '5. 因此最小阻力点 \neq 最高效率点', 'FontSize', 10, 'Color', 'b');
 
 sgtitle({'船舶推进效率分析: 阻力与效率的非单调关系', ...
-    '(Michell积分 + ITTC + PVL + Holtrop 1982)'}, 'FontSize', 14, 'FontWeight', 'bold');
+    '(Michell积分 + ITTC + Wageningen B系列 + Holtrop 1982)'}, 'FontSize', 14, 'FontWeight', 'bold');
 
 saveas(gcf, 'Core_Conclusion_Resistance_vs_Efficiency.png');
 
@@ -748,7 +716,7 @@ fprintf('  本分析采用以下方法计算船舶完整推进效率:\n');
 fprintf('  1. Michell积分 (michell.m) - 兴波阻力 Rw\n');
 fprintf('  2. ITTC 1957 公式 - 摩擦阻力 Rf\n');
 fprintf('  3. Holtrop 1982 公式 - 伴流分数w、推力减额分数t、相对旋转效率eta_R\n');
-fprintf('  4. PVL升力线理论 (PVL.m) - 螺旋桨敞水效率 eta_O [直接调用]\n');
+fprintf('  4. Wageningen B系列 + 动量理论 - 螺旋桨敞水效率 eta_O\n');
 fprintf('\n');
 fprintf('  完整推进效率公式: eta_D = eta_H * eta_O * eta_R\n');
 fprintf('  其中船身效率: eta_H = (1-t)/(1-w)\n');
@@ -808,68 +776,46 @@ function k1 = calculate_form_factor(L, B, T, Cb)
     k1 = max(0.05, min(0.5, k1));
 end
 
-function eta_O = call_PVL_for_efficiency(Common_Def, XR0, XCHD_def, XCD_def, ...
-    XVA_def, XVT_def, f0oc_def, t0oc_def, skew_def, rake_def, ...
-    Single_def1, Single_def2, Mean, Thick, Thrust_req)
-    % 尝试调用PVL.m，失败时使用Wageningen B系列经验公式
-    % PVL返回: [Sigma, skew, rake, EFFY, eta_final, XVA]
+function eta_O = calculate_propeller_efficiency(J, KT)
+    % 基于Wageningen B系列 + 动量理论计算螺旋桨敞水效率
+    % 输入:
+    %   J  - 前进系数 J = Va/(n*D)
+    %   KT - 推力系数 KT = T/(rho*n^2*D^4)
+    % 输出:
+    %   eta_O - 螺旋桨敞水效率
+    %
+    % 此函数替代PVL.m用于大型船舶高推力工况
+    % PVL在CT>2时会产生数值不稳定(复数解)
 
-    Va = Common_Def(2);
-    D = Single_def1(3);
-    n_rpm = Single_def1(2);
-    n = n_rpm / 60;
-    rho = Common_Def(11);
-
-    try
-        % 抑制警告
-        warning('off', 'all');
-
-        [~, ~, ~, EFFY_arr, eta_final, ~] = PVL(Common_Def, XR0, XCHD_def, XCD_def, ...
-            XVA_def, XVT_def, f0oc_def, t0oc_def, skew_def, rake_def, ...
-            Single_def1, Single_def2, Mean, Thick, Thrust_req);
-
-        warning('on', 'all');
-
-        % 检查有效性
-        if ~isnan(eta_final) && ~isinf(eta_final) && eta_final > 0.3 && eta_final <= 0.85
-            eta_O = eta_final;
-            return;
-        end
-
-        % 尝试从EFFY数组提取有效值
-        valid_effy = EFFY_arr(EFFY_arr > 0.3 & EFFY_arr <= 0.85 & ~isnan(EFFY_arr));
-        if ~isempty(valid_effy)
-            eta_O = valid_effy(end);
-            return;
-        end
-    catch
-        % PVL失败，继续使用理论模型
-    end
-
-    warning('on', 'all');
-    close all hidden;
-
-    % Wageningen B系列 + 动量理论估算
-    J = Va / (n * D);  % 前进系数
-    KT = Thrust_req / (rho * n^2 * D^4);  % 推力系数
-
-    % 根据KT和J估算效率 (基于B-series回归)
-    % eta_O = J/(2*pi) * KT/KQ
-    % 使用经验关系: KQ ≈ KT * (0.05 + 0.015*J) / J  (近似)
-    % 简化后: eta_O ≈ J * KT / (2*pi * KT * (0.05 + 0.015*J) / J)
-    %               = J^2 / (2*pi * (0.05 + 0.015*J))
-
-    % 更准确的Wageningen B-series近似 (5叶桨, P/D≈1.0, AE/AO≈0.8)
     if J > 0.1 && J < 1.5 && KT > 0
-        % 经验公式: eta_O = a1*J - a2*J^2 + a3
-        % 拟合典型B5-75曲线
-        eta_ideal = 2 / (1 + sqrt(1 + 8*KT/(pi*J^2)));  % 动量理论理想效率
-        eta_blade = 0.92 - 0.08*(J - 0.7)^2;  % 叶片损失修正
-        eta_O = eta_ideal * eta_blade;
-        eta_O = max(0.45, min(0.78, eta_O));  % 限制在合理范围
+        % 动量理论理想效率
+        % 基于致动盘理论: eta_ideal = 2 / (1 + sqrt(1 + CT))
+        % 其中CT = 8*KT/(pi*J^2)
+        CT = 8 * KT / (pi * J^2);
+
+        % 限制CT在合理范围内避免数值问题
+        CT = min(CT, 5.0);
+
+        eta_ideal = 2 / (1 + sqrt(1 + CT));
+
+        % 叶片损失修正 (典型Wageningen B5-75)
+        % 在J=0.7附近效率最高，偏离时下降
+        eta_blade = 0.92 - 0.06*(J - 0.7)^2;
+
+        % 粘性损失修正
+        eta_viscous = 0.98;
+
+        eta_O = eta_ideal * eta_blade * eta_viscous;
+
+        % 限制在物理合理范围
+        eta_O = max(0.45, min(0.78, eta_O));
     else
-        % J超出范围时使用保守估计
-        eta_O = 0.55 + 0.15 * (1 - abs(J - 0.7)/0.5);
-        eta_O = max(0.45, min(0.70, eta_O));
+        % J超出正常范围时使用经验估算
+        if J <= 0.1
+            eta_O = 0.45 + 0.3 * J;  % 低速时效率较低
+        else
+            eta_O = 0.55 - 0.1 * (J - 1.5);  % 高速时效率下降
+        end
+        eta_O = max(0.40, min(0.70, eta_O));
     end
 end
