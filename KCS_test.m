@@ -159,6 +159,11 @@ for iL = 1:NumL
                     % 螺旋桨效率 - 使用PVL升力线理论计算
                     [eta_O, ~, ~] = calc_propeller_efficiency_PVL(D_prop, V, w, Thrust_req, Rho_water);
 
+                    % 如果PVL计算无效，跳过该工况
+                    if isnan(eta_O)
+                        continue;
+                    end
+
                     % 相对旋转效率 - Holtrop (1984) 公式
                     Ae_Ao = 0.55;  % 典型盘面比
                     eta_R = holtrop_relative_rotative(Cp, lcb, Ae_Ao);
@@ -294,6 +299,13 @@ if isempty(CrossoverCases)
         A0 = pi * (D_prop/2)^2;
         CT = Thrust_req / (0.5 * Rho_water * Va^2 * A0);
         [eta_O, ~, ~] = calc_propeller_efficiency_PVL(D_prop, V, w, Thrust_req, Rho_water);
+
+        % 如果PVL计算无效，跳过该工况
+        if isnan(eta_O)
+            Results_fine(iCb).Cb = NaN;
+            continue;
+        end
+
         Ae_Ao = 0.55;  % 典型盘面比
         eta_R = holtrop_relative_rotative(Cp, lcb, Ae_Ao);
         eta_D = eta_H * eta_O * eta_R;
@@ -911,6 +923,15 @@ function [eta_O, KT, KQ] = calc_propeller_efficiency_PVL(D, Vs, w, Thrust, rho)
     % === 切向速度分布 Vt/Vs ===
     XVT = zeros(1, NX);  % 假设无预旋
 
+    % === 检查输入参数有效性 ===
+    % CTDES过大表示工况不合理，跳过
+    if CTDES > 5.0 || CTDES < 0.1
+        eta_O = NaN;  % 标记为无效
+        KT = NaN;
+        KQ = NaN;
+        return;
+    end
+
     % === 调用Main.m进行PVL计算 ===
     try
         [CT, CP, KT_arr, KQ_arr, ~, EFFY, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, KTRY] = ...
@@ -927,19 +948,17 @@ function [eta_O, KT, KQ] = calc_propeller_efficiency_PVL(D, Vs, w, Thrust, rho)
             KQ = KQ_arr(end);
         end
 
-        % PVL计算的效率（不做人为限制）
-        % 只检查物理合理性
-        if eta_O < 0 || eta_O > 1 || isnan(eta_O)
-            error('PVL计算结果无效');
+        % 检查PVL结果的物理合理性
+        if eta_O < 0.3 || eta_O > 0.85 || isnan(eta_O)
+            eta_O = NaN;  % 标记为无效，让主程序跳过
+            KT = NaN;
+            KQ = NaN;
         end
 
-    catch ME
-        % 如果PVL计算失败，报告错误并使用动量理论
-        % fprintf('PVL警告: %s\n', ME.message);
-        CT_simple = CTDES;
-        eta_O = 2 / (1 + sqrt(1 + CT_simple));  % 理想效率
-        eta_O = eta_O * 0.85;  % 粘性修正因子
-        KT = 0;
-        KQ = 0;
+    catch
+        % PVL计算失败，返回NaN让主程序跳过该工况
+        eta_O = NaN;
+        KT = NaN;
+        KQ = NaN;
     end
 end
