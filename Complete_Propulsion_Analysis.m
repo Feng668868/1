@@ -184,6 +184,16 @@ for i = 1:NumSamples
     XVT_def = zeros(size(XR0)) + 0.01 * (1-XR0);
 
     % 调用PVL计算螺旋桨敞水效率 (必须使用PVL.m)
+    % 调试: 打印关键参数
+    n_rpm = Single_def1(2);
+    D = Single_def1(3);
+    n_rps = n_rpm / 60;
+    J_adv = Va / (n_rps * D);  % 前进系数
+    rho = Common_Def_base(11);
+    R = D/2;
+    CT_des = Thrust_req / (rho * Va^2 * pi * R^2 / 2);  % 推力系数
+    fprintf('  [参数] Va=%.2f m/s, J=%.3f, CT=%.3f, T=%.0f N\n', Va, J_adv, CT_des, Thrust_req);
+
     eta_O = call_PVL_for_efficiency(Common_Def, XR0, XCHD_def, XCD_def, ...
         XVA_def, XVT_def, f0oc_def, t0oc_def, skew_def, rake_def, ...
         Single_def1, Single_def2, Mean, Thick, Thrust_req);
@@ -823,16 +833,29 @@ function eta_O = call_PVL_for_efficiency(Common_Def, XR0, XCHD_def, XCD_def, ...
     % 第5个返回值 eta_final 才是最终效率
 
     try
-        [~, ~, ~, ~, eta_final, ~] = PVL(Common_Def, XR0, XCHD_def, XCD_def, ...
+        [~, ~, ~, EFFY_arr, eta_final, ~] = PVL(Common_Def, XR0, XCHD_def, XCD_def, ...
             XVA_def, XVT_def, f0oc_def, t0oc_def, skew_def, rake_def, ...
             Single_def1, Single_def2, Mean, Thick, Thrust_req);
 
-        if isnan(eta_final) || eta_final <= 0 || eta_final > 1
-            eta_O = NaN;
+        % 调试输出
+        fprintf('  [PVL调试] eta_final=%.4f, EFFY范围=[%.4f, %.4f]\n', ...
+            eta_final, min(EFFY_arr), max(EFFY_arr));
+
+        % 放宽有效性检查: 只要eta_final是有限数且在合理范围内即可
+        if isnan(eta_final) || isinf(eta_final) || eta_final <= 0 || eta_final > 1
+            % 尝试从EFFY数组中取最后一个有效值
+            valid_effy = EFFY_arr(EFFY_arr > 0 & EFFY_arr <= 1);
+            if ~isempty(valid_effy)
+                eta_O = valid_effy(end);
+                fprintf('  [PVL] 使用EFFY备选值: %.4f\n', eta_O);
+            else
+                eta_O = NaN;
+            end
         else
             eta_O = eta_final;
         end
-    catch
+    catch ME
+        fprintf('  [PVL错误] %s\n', ME.message);
         eta_O = NaN;
     end
 end
