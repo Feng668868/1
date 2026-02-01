@@ -142,8 +142,12 @@ for iL = 1:NumL
 
                     Rt = Rf + Rw + Rv;
 
-                    % --- C. Holtrop 伴流和推力减额 (增强版) ---
-                    [w, t_val] = holtrop_enhanced(L, B, T, Cb, D_prop, Fr);
+                    % --- C. Holtrop 伴流和推力减额 ---
+                    % 使用Holtrop & Mennen (1982, 1984) 公式
+                    Cp = Cb / 0.98;           % 棱形系数近似
+                    lcb = -0.5 + 0.5*(Cb-0.6);  % 浮心位置 (高Cb船浮心略靠艉)
+                    Cstern = 0;               % 常规艉型
+                    [w, t_val] = holtrop_wake_thrust(L, B, T, Cb, D_prop, Cp, lcb, Cstern);
 
                     % --- D. 效率计算 ---
                     eta_H = (1 - t_val) / (1 - w);
@@ -282,7 +286,10 @@ if isempty(CrossoverCases)
         Rv = 0.1 * Rf * (1 + 0.5*(Cb - 0.65));
         Rt = Rf + Rw + Rv;
 
-        [w, t_val] = holtrop_enhanced(L, B, T, Cb, D_prop, Fr);
+        Cp = Cb / 0.98;
+        lcb = -0.5 + 0.5*(Cb-0.6);
+        Cstern = 0;
+        [w, t_val] = holtrop_wake_thrust(L, B, T, Cb, D_prop, Cp, lcb, Cstern);
 
         eta_H = (1 - t_val) / (1 - w);
         Thrust_req = Rt / (1 - t_val);
@@ -573,49 +580,130 @@ fprintf('结果已保存到 Ship_Optimization_Results.mat 和 Ship_Propeller_Opt
 % 辅助函数
 % ==============================================================================
 
-function [w, t] = holtrop_enhanced(L, B, T, Cb, D_prop, Fr)
-    % 增强版Holtrop伴流和推力减额公式
-    % 考虑傅汝德数、船型比例等多因素
+function [w, t] = holtrop_wake_thrust(L, B, T, Cb, D_prop, Cp, lcb, Cstern)
+    % Holtrop & Mennen (1982, 1984) 伴流和推力减额公式
+    % 参考文献:
+    % [1] Holtrop J., Mennen G.G.J. (1982). "An approximate power prediction method"
+    %     International Shipbuilding Progress, Vol.29, No.335
+    % [2] Holtrop J. (1984). "A statistical re-analysis of resistance and propulsion data"
+    %     International Shipbuilding Progress, Vol.31, No.363
+    %
+    % 输入:
+    %   L      - 水线长 [m]
+    %   B      - 型宽 [m]
+    %   T      - 吃水 [m] (这里用艉吃水Ta近似)
+    %   Cb     - 方形系数
+    %   D_prop - 螺旋桨直径 [m]
+    %   Cp     - 棱形系数 (若未知可用 Cp = Cb/0.98)
+    %   lcb    - 浮心纵向位置 (% of L, 从舯向艏为正, 通常-3~3)
+    %   Cstern - 艉部形状系数 (-25~10, V形=-25, U形=10, 常规=0)
 
-    LB = L / B;
-    BT = B / T;
-    DT = D_prop / T;
-
-    % === 伴流分数 w ===
-    % Holtrop原始公式的简化版，增强Cb依赖性
-
-    % 基础伴流 (强化Cb影响)
-    % 实际散货船w可达0.35-0.45
-    if Cb <= 0.65
-        w_base = 0.05 + 0.45 * Cb;
-    else
-        % 高Cb时，w增长更快
-        w_base = 0.05 + 0.45 * 0.65 + 0.8 * (Cb - 0.65);
+    % 若未提供参数，使用默认值
+    if nargin < 6 || isempty(Cp)
+        Cp = Cb / 0.98;  % 近似关系
+    end
+    if nargin < 7 || isempty(lcb)
+        lcb = -0.75;  % 典型值，浮心略靠艉
+    end
+    if nargin < 8 || isempty(Cstern)
+        Cstern = 0;  % 常规艉型
     end
 
-    % L/B修正：细长船伴流较小
-    w_LB = -0.015 * (LB - 6);
+    Ta = T;  % 艉吃水 (假设平浮)
 
-    % B/T修正：宽浅船伴流较大
-    w_BT = 0.01 * (BT - 3);
+    % === Holtrop 伴流分数 w (单桨船) ===
+    % 公式来源: Holtrop (1984), Eq. (28)-(32)
 
-    % 螺旋桨直径修正
-    w_D = -0.04 * (DT - 0.65);
+    % 系数 c8: 与 B/Ta 相关
+    if B/Ta < 5
+        c8 = B / Ta * (1.0 - 0.5 * (B/Ta - 5)^2);
+        c8 = max(c8, 0);
+    else
+        c8 = 1.0;
+    end
+    c8 = B * sqrt(1/(L*Ta));  % 简化形式
 
-    % 傅汝德数修正：高速时伴流减小
-    w_Fr = -0.2 * max(0, Fr - 0.20);
+    % 系数 c9: 与 Cstern 相关
+    c9 = 0.5 - 0.5 * Cstern / 25;
+    c9 = max(0, min(1, c9));
 
-    w = w_base + w_LB + w_BT + w_D + w_Fr;
-    w = max(0.08, min(0.50, w));
+    % Cp1: 修正棱形系数
+    Cp1 = 1.45 * Cp - 0.315 - 0.0225 * lcb;
+    Cp1 = max(0.1, min(0.9, Cp1));
 
-    % === 推力减额分数 t ===
-    % t/w比值：通常0.65-0.85
-    % 丰满船t/w较小
-    tw_ratio = 0.75 - 0.25 * (Cb - 0.65);
-    tw_ratio = max(0.60, min(0.85, tw_ratio));
+    % 系数 c11: 与 Ta/D 相关
+    TaD = Ta / D_prop;
+    if TaD < 2
+        c11 = TaD;
+    else
+        c11 = 0.0833333 * TaD^3 + 1.33333;
+    end
 
-    t = w * tw_ratio;
-    t = max(0.06, min(0.35, t));
+    % 系数 c19: 与 Cp 相关
+    % Cm: 中横剖面系数，近似为 Cm = Cb/Cp
+    Cm = Cb / Cp;
+    if Cp < 0.7
+        c19 = 0.12997 / (0.95 - Cb) - 0.11056 / (0.95 - Cp);
+    else
+        c19 = 0.18567 / (1.3571 - Cm) - 0.71276 + 0.38648 * Cp;
+    end
+    c19 = max(-0.1, min(0.1, c19));
+
+    % 系数 c20: 与推进器类型相关 (常规螺旋桨=1)
+    c20 = 1.0;
+
+    % Cv: 粘性阻力系数
+    % Cv = (1+k)*Cf + Ca
+    % k: 形状因子 (Holtrop形式因子公式)
+    Lr = L * (1 - Cp + 0.06*Cp*lcb/(4*Cp - 1));  % 进流长度
+    Disp = L * B * T * Cb;  % 排水体积
+    k_form = 0.93 + 0.4871*(B/L)^1.0681 * (T/L)^0.4611 * ...
+             (Lr/L)^0.1216 * (L^3/Disp)^0.3649 * (1-Cp)^(-0.6042);
+    k_form = max(0.1, min(0.5, k_form - 1));  % 转换为形状因子
+
+    Re = 1e9;  % 大船典型雷诺数
+    Cf = 0.075 / (log10(Re) - 2)^2;
+    Ca = 0.00035;  % 粗糙度余量
+    Cv = (1 + k_form) * Cf + Ca;
+
+    % Holtrop 伴流公式 (单桨船)
+    % w = c9*c20*Cv*(L/Ta)*(0.050776 + 0.93405*c11*Cv/(1-Cp1))
+    %     + 0.27915*c20*sqrt(B/(L*(1-Cp1))) + c19*c20
+
+    term1 = c9 * c20 * Cv * sqrt(L/Ta) * (0.050776 + 0.93405*c11*Cv/(1-Cp1));
+    term2 = 0.27915 * c20 * sqrt(B / (L * (1 - Cp1)));
+    term3 = c19 * c20;
+
+    w = term1 + term2 + term3;
+
+    % 限制在合理范围
+    w = max(0.10, min(0.45, w));
+
+    % === Holtrop 推力减额分数 t ===
+    % 公式来源: Holtrop (1984), Eq. (33)-(35)
+
+    % 系数 c10: 与 L/B 相关
+    LB = L / B;
+    if LB > 5.2
+        c10 = 0.25 - 0.003328402 / ((B/L) - 0.134615385);
+    else
+        c10 = B / L;
+    end
+
+    % Holtrop 推力减额公式 (常规单桨)
+    % t = 0.25014*(B/L)^0.28956 * (sqrt(B*T)/D)^0.2624 / (1-Cp+0.0225*lcb)^0.01762
+    %     + 0.0015*Cstern
+
+    t = 0.25014 * (B/L)^0.28956 * (sqrt(B*T)/D_prop)^0.2624 ...
+        / (1 - Cp + 0.0225*lcb)^0.01762 + 0.0015 * Cstern;
+
+    % 限制在合理范围
+    t = max(0.08, min(0.30, t));
+
+    % 确保 t < w (物理约束)
+    if t >= w
+        t = 0.75 * w;
+    end
 end
 
 function eta_O = propeller_efficiency_enhanced(CT, Va, D, Cb)
