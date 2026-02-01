@@ -137,10 +137,8 @@ for iL = 1:NumL
                     % 兴波阻力 (Michell积分)
                     Rw = michell(Y, V, L, B, T, Rho_water, N_theta);
 
-                    % 形状阻力 (与Cb相关)
-                    Rv = 0.1 * Rf * (1 + 0.5*(Cb - 0.65));
-
-                    Rt = Rf + Rw + Rv;
+                    % 总阻力 = 摩擦阻力 + 兴波阻力 (严格Michell + ITTC)
+                    Rt = Rf + Rw;
 
                     % --- C. Holtrop 伴流和推力减额 ---
                     % 使用Holtrop & Mennen (1982, 1984) 公式
@@ -283,8 +281,7 @@ if isempty(CrossoverCases)
         Cf = 0.075 / (log10(Re) - 2)^2;
         Rf = 0.5 * Rho_water * S * V^2 * (Cf + 0.0004);
         Rw = michell(Y, V, L, B, T, Rho_water, N_theta);
-        Rv = 0.1 * Rf * (1 + 0.5*(Cb - 0.65));
-        Rt = Rf + Rw + Rv;
+        Rt = Rf + Rw;  % 严格Michell + ITTC
 
         Cp = Cb / 0.98;
         lcb = -0.5 + 0.5*(Cb-0.6);
@@ -907,15 +904,9 @@ function [eta_O, KT, KQ] = calc_propeller_efficiency_PVL(D, Vs, w, Thrust, rho)
     XCD = 0.008 * ones(1, NX);  % 典型值
 
     % === 轴向速度分布 Va/Vs ===
-    % 伴流影响：内侧伴流大，外侧伴流小
-    XVA = zeros(1, NX);
-    for i = 1:NX
-        r_R = XR(i);
-        % 伴流径向分布：内侧大，外侧小
-        w_local = w * (1.5 - 0.7*r_R);  % 简化的径向伴流分布
-        w_local = max(0.05, min(0.5, w_local));
-        XVA(i) = 1 - w_local;
-    end
+    % 使用Holtrop有效伴流分数（均匀分布）
+    % Holtrop公式给出的是有效平均伴流
+    XVA = (1 - w) * ones(1, NX);
 
     % === 切向速度分布 Vt/Vs ===
     XVT = zeros(1, NX);  % 假设无预旋
@@ -936,15 +927,18 @@ function [eta_O, KT, KQ] = calc_propeller_efficiency_PVL(D, Vs, w, Thrust, rho)
             KQ = KQ_arr(end);
         end
 
-        % 确保效率在合理范围
-        eta_O = max(0.40, min(0.75, eta_O));
+        % PVL计算的效率（不做人为限制）
+        % 只检查物理合理性
+        if eta_O < 0 || eta_O > 1 || isnan(eta_O)
+            error('PVL计算结果无效');
+        end
 
-    catch
-        % 如果PVL计算失败，使用动量理论近似
+    catch ME
+        % 如果PVL计算失败，报告错误并使用动量理论
+        % fprintf('PVL警告: %s\n', ME.message);
         CT_simple = CTDES;
-        eta_O = 2 / (1 + sqrt(1 + CT_simple));
-        eta_O = eta_O * 0.85;  % 考虑粘性损失
-        eta_O = max(0.40, min(0.75, eta_O));
+        eta_O = 2 / (1 + sqrt(1 + CT_simple));  % 理想效率
+        eta_O = eta_O * 0.85;  % 粘性修正因子
         KT = 0;
         KQ = 0;
     end
