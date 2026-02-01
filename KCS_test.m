@@ -161,9 +161,9 @@ for iL = 1:NumL
                     % 螺旋桨效率 - 使用PVL升力线理论计算
                     [eta_O, ~, ~] = calc_propeller_efficiency_PVL(D_prop, V, w, Thrust_req, Rho_water);
 
-                    % 相对旋转效率
-                    eta_R = 0.98 + 0.03 * (Cb - 0.65);
-                    eta_R = max(0.96, min(1.02, eta_R));
+                    % 相对旋转效率 - Holtrop (1984) 公式
+                    Ae_Ao = 0.55;  % 典型盘面比
+                    eta_R = holtrop_relative_rotative(Cp, lcb, Ae_Ao);
 
                     % 总推进效率
                     eta_D = eta_H * eta_O * eta_R;
@@ -297,8 +297,8 @@ if isempty(CrossoverCases)
         A0 = pi * (D_prop/2)^2;
         CT = Thrust_req / (0.5 * Rho_water * Va^2 * A0);
         [eta_O, ~, ~] = calc_propeller_efficiency_PVL(D_prop, V, w, Thrust_req, Rho_water);
-        eta_R = 0.98 + 0.03 * (Cb - 0.65);
-        eta_R = max(0.96, min(1.02, eta_R));
+        Ae_Ao = 0.55;  % 典型盘面比
+        eta_R = holtrop_relative_rotative(Cp, lcb, Ae_Ao);
         eta_D = eta_H * eta_O * eta_R;
         Pd = Rt * V / eta_D;
 
@@ -704,6 +704,29 @@ function [w, t] = holtrop_wake_thrust(L, B, T, Cb, D_prop, Cp, lcb, Cstern)
     if t >= w
         t = 0.75 * w;
     end
+end
+
+function eta_R = holtrop_relative_rotative(Cp, lcb, Ae_Ao)
+    % Holtrop (1984) 相对旋转效率公式
+    % 参考文献:
+    % Holtrop J. (1984). "A statistical re-analysis of resistance and propulsion data"
+    % International Shipbuilding Progress, Vol.31, No.363, Eq. (36)
+    %
+    % 输入:
+    %   Cp    - 棱形系数
+    %   lcb   - 浮心纵向位置 (% of L, 从舯向艏为正)
+    %   Ae_Ao - 螺旋桨盘面比 (expanded area ratio)
+    %
+    % 输出:
+    %   eta_R - 相对旋转效率
+    %
+    % 公式 (单桨船):
+    % η_R = 0.9922 - 0.05908*(Ae/Ao) + 0.07424*(Cp - 0.0225*lcb)
+
+    eta_R = 0.9922 - 0.05908 * Ae_Ao + 0.07424 * (Cp - 0.0225 * lcb);
+
+    % 限制在合理范围 (通常0.96-1.05)
+    eta_R = max(0.96, min(1.05, eta_R));
 end
 
 function eta_O = propeller_efficiency_enhanced(CT, Va, D, Cb)
