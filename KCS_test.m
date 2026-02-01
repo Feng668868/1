@@ -300,9 +300,19 @@ if isempty(CrossoverCases)
         CT = Thrust_req / (0.5 * Rho_water * Va^2 * A0);
         [eta_O, ~, ~] = calc_propeller_efficiency_PVL(D_prop, V, w, Thrust_req, Rho_water);
 
-        % 如果PVL计算无效，跳过该工况
+        % 如果PVL计算无效，存储NaN并继续
         if isnan(eta_O)
             Results_fine(iCb).Cb = NaN;
+            Results_fine(iCb).Rt = NaN;
+            Results_fine(iCb).Rw = NaN;
+            Results_fine(iCb).Rf = NaN;
+            Results_fine(iCb).w = NaN;
+            Results_fine(iCb).t = NaN;
+            Results_fine(iCb).eta_H = NaN;
+            Results_fine(iCb).eta_O = NaN;
+            Results_fine(iCb).eta_D = NaN;
+            Results_fine(iCb).Pd = NaN;
+            Results_fine(iCb).Thrust = NaN;
             continue;
         end
 
@@ -322,6 +332,16 @@ if isempty(CrossoverCases)
         Results_fine(iCb).eta_D = eta_D;
         Results_fine(iCb).Pd = Pd;
         Results_fine(iCb).Thrust = Thrust_req;
+    end
+
+    % 过滤有效结果
+    valid_idx = ~isnan([Results_fine.Cb]);
+    Results_fine = Results_fine(valid_idx);
+
+    if isempty(Results_fine)
+        fprintf('警告：所有工况的PVL计算都无效\n');
+        fprintf('可能原因：CTDES超出范围或PVL收敛失败\n');
+        return;
     end
 
     % 输出详细表格
@@ -859,8 +879,8 @@ function f = three_param_shape(x, h, a1, a2)
 end
 
 function [eta_O, KT, KQ] = calc_propeller_efficiency_PVL(D, Vs, w, Thrust, rho)
-    % 使用PVL升力线理论计算螺旋桨敞水效率
-    % 调用Main.m进行涡格法计算
+    % 使用PVL升力线理论计算螺旋桨效率
+    % 直接调用用户的PVL.m
     %
     % 输入:
     %   D      - 螺旋桨直径 [m]
@@ -868,95 +888,87 @@ function [eta_O, KT, KQ] = calc_propeller_efficiency_PVL(D, Vs, w, Thrust, rho)
     %   w      - 伴流分数
     %   Thrust - 所需推力 [N]
     %   rho    - 水密度 [kg/m³]
-    %
-    % 输出:
-    %   eta_O  - 螺旋桨敞水效率
-    %   KT     - 推力系数
-    %   KQ     - 扭矩系数
 
-    R = D / 2;
-    Va = Vs * (1 - w);  % 进速
-
-    % === 螺旋桨设计参数 (典型商船螺旋桨) ===
+    % === 螺旋桨设计参数 ===
     NBLADE = 4;              % 叶片数
     Dhub = 0.18 * D;         % 桨毂直径
-    Rhub_R = Dhub / D;       % 桨毂半径比
 
-    % 估算转速 (基于最优前进系数J≈0.6-0.8)
+    % 估算转速 (基于最优前进系数J≈0.6-0.7)
+    Va = Vs * (1 - w);
     J_target = 0.65;
-    n = Va / (J_target * D);  % 转速 [rps]
-    ADVCO = Va / (n * D);     % 前进系数 J
+    n_rps = Va / (J_target * D);
+    N_RPM = n_rps * 60;      % 转速 [RPM]
 
-    % 推力系数
-    CTDES = Thrust / (0.5 * rho * Va^2 * pi * R^2);
+    % === 半径分布 (r/R) ===
+    NX = 11;
+    Rhub_R = Dhub / D;
+    XR0 = linspace(Rhub_R, 1.0, NX);
 
-    % === PVL计算参数 ===
+    % === 弦长比分布 c/D (Wageningen B系列) ===
+    XCHD_def = zeros(1, NX);
+    for i = 1:NX
+        r_R = XR0(i);
+        XCHD_def(i) = 0.16 * (1.0 - 0.3*(r_R - 0.7)^2);
+    end
+
+    % === 阻力系数分布 Cd ===
+    XCD_def = 0.008 * ones(1, NX);
+
+    % === 轴向速度分布 Va/Vs (伴流影响) ===
+    XVA_def = (1 - w) * ones(1, NX);
+
+    % === 切向速度分布 Vt/Vs ===
+    XVT_def = zeros(1, NX);
+
+    % === 弯度和厚度分布 ===
+    f0oc_def = 0.02 * ones(1, NX);   % 弯度比
+    t0oc_def = 0.05 * ones(1, NX);   % 厚度比
+
+    % === 掠角和倾角分布 ===
+    skew_def = zeros(1, NX);         % 掠角 [度]
+    rake_def = zeros(1, NX);         % 倾角 [Xs/D]
+
+    % === Common_Def参数数组 ===
+    % [?, V, Dhub, MT, ITER, RHV, NX, HR, HT, CRP, rho]
     MT = 20;       % 控制点数
     ITER = 50;     % 最大迭代次数
-    IHUB = 1;      % 启用Hub镜像涡
     RHV = 0.5;     % 镜像涡半径比
-    NX = 11;       % 输入半径点数
     HR = 0;        % Hub卸载因子
     HT = 1;        % Tip卸载因子
     CRP = 1;       % 旋涡抵消因子
 
-    % === 半径分布 (r/R) ===
-    XR = linspace(Rhub_R, 1.0, NX);
+    Common_Def = [0, Vs, Dhub, MT, ITER, RHV, NX, HR, HT, CRP, rho];
 
-    % === 弦长比分布 c/D (典型Wageningen B系列形式) ===
-    % 最大弦长在0.7R附近
-    XCHD = zeros(1, NX);
-    for i = 1:NX
-        r_R = XR(i);
-        % Wageningen B4-70 近似弦长分布
-        XCHD(i) = 0.16 * (1.0 - 0.3*(r_R - 0.7)^2) * (1.0 - (r_R - Rhub_R)/(1-Rhub_R)*0.1);
-    end
+    % === Single_def1 = [NBLADE, N_RPM, D] ===
+    Single_def1 = [NBLADE, N_RPM, D];
 
-    % === 阻力系数分布 Cd ===
-    XCD = 0.008 * ones(1, NX);  % 典型值
+    % === Single_def2 = [H, dV, AlphaI, NP] ===
+    H = 10;        % 螺旋桨轴心水深 [m]
+    dV = 0.1;      % 速度扰动
+    AlphaI = 1.0;  % 理想攻角 [度]
+    NP = 20;       % 剖面点数
+    Single_def2 = [H, dV, AlphaI, NP];
 
-    % === 轴向速度分布 Va/Vs ===
-    % 使用Holtrop有效伴流分数（均匀分布）
-    % Holtrop公式给出的是有效平均伴流
-    XVA = (1 - w) * ones(1, NX);
+    % === 翼型类型 ===
+    Mean = 1;      % NACA平均线
+    Thick = 1;     % NACA 65A010厚度
 
-    % === 切向速度分布 Vt/Vs ===
-    XVT = zeros(1, NX);  % 假设无预旋
-
-    % === 检查输入参数有效性 ===
-    % CTDES过大表示工况不合理，跳过
-    if CTDES > 5.0 || CTDES < 0.1
-        eta_O = NaN;  % 标记为无效
-        KT = NaN;
-        KQ = NaN;
-        return;
-    end
-
-    % === 调用Main.m进行PVL计算 ===
+    % === 调用PVL ===
     try
-        [CT, CP, KT_arr, KQ_arr, ~, EFFY, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, KTRY] = ...
-            Main(MT, ITER, IHUB, RHV, NX, NBLADE, ADVCO, CTDES, HR, HT, CRP, XR, XCHD, XCD, XVA, XVT);
+        [~, ~, ~, ~, eta_final, ~] = PVL(Common_Def, XR0, XCHD_def, XCD_def, ...
+            XVA_def, XVT_def, f0oc_def, t0oc_def, skew_def, rake_def, ...
+            Single_def1, Single_def2, Mean, Thick, Thrust);
 
-        % 取最终收敛的结果
-        if KTRY > 0 && KTRY <= length(EFFY)
-            eta_O = EFFY(KTRY);
-            KT = KT_arr(KTRY);
-            KQ = KQ_arr(KTRY);
-        else
-            eta_O = EFFY(end);
-            KT = KT_arr(end);
-            KQ = KQ_arr(end);
-        end
+        eta_O = eta_final;
+        KT = 0;  % PVL不直接返回KT
+        KQ = 0;
 
-        % 检查PVL结果的物理合理性
-        if eta_O < 0.3 || eta_O > 0.85 || isnan(eta_O)
-            eta_O = NaN;  % 标记为无效，让主程序跳过
-            KT = NaN;
-            KQ = NaN;
+        % 检查结果合理性
+        if isnan(eta_O) || eta_O < 0.3 || eta_O > 0.85
+            eta_O = NaN;
         end
 
     catch
-        % PVL计算失败，返回NaN让主程序跳过该工况
         eta_O = NaN;
         KT = NaN;
         KQ = NaN;
