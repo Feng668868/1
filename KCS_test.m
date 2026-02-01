@@ -158,8 +158,8 @@ for iL = 1:NumL
                     A0 = pi * (D_prop/2)^2;
                     CT = Thrust_req / (0.5 * Rho_water * Va^2 * A0);
 
-                    % 螺旋桨效率
-                    eta_O = propeller_efficiency_enhanced(CT, Va, D_prop, Cb);
+                    % 螺旋桨效率 - 使用PVL升力线理论计算
+                    [eta_O, ~, ~] = calc_propeller_efficiency_PVL(D_prop, V, w, Thrust_req, Rho_water);
 
                     % 相对旋转效率
                     eta_R = 0.98 + 0.03 * (Cb - 0.65);
@@ -296,7 +296,7 @@ if isempty(CrossoverCases)
         Va = V * (1 - w);
         A0 = pi * (D_prop/2)^2;
         CT = Thrust_req / (0.5 * Rho_water * Va^2 * A0);
-        eta_O = propeller_efficiency_enhanced(CT, Va, D_prop, Cb);
+        [eta_O, ~, ~] = calc_propeller_efficiency_PVL(D_prop, V, w, Thrust_req, Rho_water);
         eta_R = 0.98 + 0.03 * (Cb - 0.65);
         eta_R = max(0.96, min(1.02, eta_R));
         eta_D = eta_H * eta_O * eta_R;
@@ -823,5 +823,106 @@ function f = three_param_shape(x, h, a1, a2)
         else
             f(i) = h + a2/2 * (cos(2*pi*x(i)) + 1) + a1;
         end
+    end
+end
+
+function [eta_O, KT, KQ] = calc_propeller_efficiency_PVL(D, Vs, w, Thrust, rho)
+    % 使用PVL升力线理论计算螺旋桨敞水效率
+    % 调用Main.m进行涡格法计算
+    %
+    % 输入:
+    %   D      - 螺旋桨直径 [m]
+    %   Vs     - 船速 [m/s]
+    %   w      - 伴流分数
+    %   Thrust - 所需推力 [N]
+    %   rho    - 水密度 [kg/m³]
+    %
+    % 输出:
+    %   eta_O  - 螺旋桨敞水效率
+    %   KT     - 推力系数
+    %   KQ     - 扭矩系数
+
+    R = D / 2;
+    Va = Vs * (1 - w);  % 进速
+
+    % === 螺旋桨设计参数 (典型商船螺旋桨) ===
+    NBLADE = 4;              % 叶片数
+    Dhub = 0.18 * D;         % 桨毂直径
+    Rhub_R = Dhub / D;       % 桨毂半径比
+
+    % 估算转速 (基于最优前进系数J≈0.6-0.8)
+    J_target = 0.65;
+    n = Va / (J_target * D);  % 转速 [rps]
+    ADVCO = Va / (n * D);     % 前进系数 J
+
+    % 推力系数
+    CTDES = Thrust / (0.5 * rho * Va^2 * pi * R^2);
+
+    % === PVL计算参数 ===
+    MT = 20;       % 控制点数
+    ITER = 50;     % 最大迭代次数
+    IHUB = 1;      % 启用Hub镜像涡
+    RHV = 0.5;     % 镜像涡半径比
+    NX = 11;       % 输入半径点数
+    HR = 0;        % Hub卸载因子
+    HT = 1;        % Tip卸载因子
+    CRP = 1;       % 旋涡抵消因子
+
+    % === 半径分布 (r/R) ===
+    XR = linspace(Rhub_R, 1.0, NX);
+
+    % === 弦长比分布 c/D (典型Wageningen B系列形式) ===
+    % 最大弦长在0.7R附近
+    XCHD = zeros(1, NX);
+    for i = 1:NX
+        r_R = XR(i);
+        % Wageningen B4-70 近似弦长分布
+        XCHD(i) = 0.16 * (1.0 - 0.3*(r_R - 0.7)^2) * (1.0 - (r_R - Rhub_R)/(1-Rhub_R)*0.1);
+    end
+
+    % === 阻力系数分布 Cd ===
+    XCD = 0.008 * ones(1, NX);  % 典型值
+
+    % === 轴向速度分布 Va/Vs ===
+    % 伴流影响：内侧伴流大，外侧伴流小
+    XVA = zeros(1, NX);
+    for i = 1:NX
+        r_R = XR(i);
+        % 伴流径向分布：内侧大，外侧小
+        w_local = w * (1.5 - 0.7*r_R);  % 简化的径向伴流分布
+        w_local = max(0.05, min(0.5, w_local));
+        XVA(i) = 1 - w_local;
+    end
+
+    % === 切向速度分布 Vt/Vs ===
+    XVT = zeros(1, NX);  % 假设无预旋
+
+    % === 调用Main.m进行PVL计算 ===
+    try
+        [CT, CP, KT_arr, KQ_arr, ~, EFFY, ~, ~, ~, ~, ~, ~, ~, ~, ~, ~, KTRY] = ...
+            Main(MT, ITER, IHUB, RHV, NX, NBLADE, ADVCO, CTDES, HR, HT, CRP, XR, XCHD, XCD, XVA, XVT);
+
+        % 取最终收敛的结果
+        if KTRY > 0 && KTRY <= length(EFFY)
+            eta_O = EFFY(KTRY);
+            KT = KT_arr(KTRY);
+            KQ = KQ_arr(KTRY);
+        else
+            eta_O = EFFY(end);
+            KT = KT_arr(end);
+            KQ = KQ_arr(end);
+        end
+
+        % 确保效率在合理范围
+        eta_O = max(0.40, min(0.75, eta_O));
+
+    catch
+        % 如果PVL计算失败，使用动量理论近似
+        CT_simple = CTDES;
+        eta_O = 2 / (1 + sqrt(1 + CT_simple));
+        eta_O = eta_O * 0.85;  % 考虑粘性损失
+        eta_O = max(0.40, min(0.75, eta_O));
+        KT = 0;
+        KQ = 0;
     end
 end
